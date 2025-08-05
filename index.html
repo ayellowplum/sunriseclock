@@ -282,6 +282,7 @@
     </div>
 
     <!-- Hidden audio elements for built-in sounds -->
+    <!-- These files should be in the same directory as the HTML file -->
     <audio id="audio-clair_de_lune" loop src="clair_de_lune.mp3"></audio>
     <audio id="audio-gymnopedie_no_1" loop src="gymnopedie_no_1.mp3"></audio>
     <audio id="audio-canon_in_d" loop src="canon_in_d.mp3"></audio>
@@ -318,25 +319,30 @@
 
         // --- Constants ---
         const TEST_ALARM_DURATION_MS = 15000; // 15 seconds for test
+        const SETTINGS_KEY = 'sunriseAlarmSettings';
 
         // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
+            // Start the clock
             setInterval(updateClock, 1000);
             updateClock();
 
-            const now = new Date();
-            const hours = String(now.getHours()).padStart(2, '0');
-            const minutes = String(now.getMinutes()).padStart(2, '0');
-            alarmTimeInput.value = `${hours}:${minutes}`;
+            // Load settings from Local Storage
+            loadSettings();
 
+            // Set up event listeners
             setAlarmBtn.addEventListener('click', toggleAlarm);
             stopAlarmBtn.addEventListener('click', stopAlarm);
             testAlarmBtn.addEventListener('click', runTestAlarm);
-            alarmSoundSelect.addEventListener('change', handleSoundChange);
-            sunriseDurationInput.addEventListener('input', handleSunriseDurationChange);
             
-            handleSoundChange();
-            handleSunriseDurationChange();
+            // Add listeners to save settings whenever a control is changed
+            alarmSoundSelect.addEventListener('change', () => { handleSoundChange(); saveSettings(); });
+            sunriseDurationInput.addEventListener('input', () => { handleSunriseDurationChange(); saveSettings(); });
+            alarmTimeInput.addEventListener('change', saveSettings);
+            youtubeUrlInput.addEventListener('input', saveSettings);
+            ringDurationInput.addEventListener('input', saveSettings);
+            
+            // Load the YouTube API
             loadYouTubeAPI();
         });
 
@@ -345,6 +351,54 @@
             const now = new Date();
             clockElement.textContent = now.toLocaleTimeString('en-US', { hour12: false });
         }
+
+        // --- Settings Persistence (Local Storage) ---
+        function saveSettings() {
+            const settings = {
+                alarmTime: alarmTimeInput.value,
+                sunriseDuration: sunriseDurationInput.value,
+                alarmSound: alarmSoundSelect.value,
+                youtubeUrl: youtubeUrlInput.value,
+                ringDuration: ringDurationInput.value,
+                isAlarmActive: isAlarmActive 
+            };
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+        }
+
+        function loadSettings() {
+            const savedSettings = localStorage.getItem(SETTINGS_KEY);
+            if (savedSettings) {
+                const settings = JSON.parse(savedSettings);
+
+                // Restore control values
+                alarmTimeInput.value = settings.alarmTime || getDefaultTime();
+                sunriseDurationInput.value = settings.sunriseDuration || 30;
+                alarmSoundSelect.value = settings.alarmSound || 'clair_de_lune';
+                youtubeUrlInput.value = settings.youtubeUrl || '';
+                ringDurationInput.value = settings.ringDuration || 0;
+
+                // Update UI based on loaded settings
+                handleSunriseDurationChange();
+                handleSoundChange();
+
+                // If the alarm was active when settings were saved, reactivate it
+                if (settings.isAlarmActive) {
+                    setAlarm();
+                }
+
+            } else {
+                // If no settings, set a default time in the input
+                alarmTimeInput.value = getDefaultTime();
+            }
+        }
+        
+        function getDefaultTime() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            return `${hours}:${minutes}`;
+        }
+
 
         // --- Alarm Logic ---
         function toggleAlarm() {
@@ -367,6 +421,7 @@
             const alarmDate = new Date();
             alarmDate.setHours(hours, minutes, 0, 0);
 
+            // If alarm time is in the past for today, set it for tomorrow
             if (alarmDate <= now) {
                 alarmDate.setDate(alarmDate.getDate() + 1);
             }
@@ -382,17 +437,23 @@
             
             if (alarmInterval) clearInterval(alarmInterval);
             alarmInterval = setInterval(checkAlarm, 1000);
+            
+            saveSettings(); // Save the new active state
         }
 
         function cancelAlarm() {
             clearInterval(alarmInterval);
             if(ringTimeout) clearTimeout(ringTimeout);
+            
             alarmTime = null;
             isAlarmActive = false;
             isSunrisePeriod = false;
+            
             setAlarmBtn.classList.remove('active');
             updateAlarmInfo("No alarm set");
             alarmTimeInput.disabled = false;
+            
+            saveSettings(); // Save the new inactive state
         }
 
         function checkAlarm() {
@@ -402,7 +463,7 @@
             const sunriseDurationMinutes = parseInt(sunriseDurationInput.value, 10);
             const sunriseStartTime = new Date(alarmTime.getTime() - sunriseDurationMinutes * 60 * 1000);
 
-            // Sunrise Period: From start of sunrise duration up to the alarm time
+            // Sunrise Period
             if (now >= sunriseStartTime && now < alarmTime) {
                 if (!isSunrisePeriod) {
                     isSunrisePeriod = true;
@@ -412,21 +473,18 @@
                 const totalDurationMs = alarmTime.getTime() - sunriseStartTime.getTime();
                 const elapsedMs = now.getTime() - sunriseStartTime.getTime();
                 
-                // Visual and Volume progress are linear over the whole sunrise duration
                 const progress = Math.min(elapsedMs / totalDurationMs, 1.0);
                 sunriseOverlay.style.opacity = 1 - progress;
                 setVolume(progress);
-
             }
 
-            // Alarm Time: The exact moment the alarm is set for
+            // Alarm Time
             if (now >= alarmTime) {
                 triggerAlarm();
             }
         }
         
         function triggerAlarm() {
-            // Stop the check interval, the alarm is now ringing
             clearInterval(alarmInterval);
 
             sunriseOverlay.style.transition = 'opacity 0.5s linear';
@@ -441,31 +499,24 @@
             setAlarmBtn.style.display = 'none';
             testAlarmBtn.style.display = 'none';
 
-            // Set timeout for how long the alarm rings, if specified
             const ringDurationMinutes = parseInt(ringDurationInput.value, 10);
             if (ringDurationMinutes > 0) {
-                const ringDurationMs = ringDurationMinutes * 60 * 1000;
-                ringTimeout = setTimeout(stopAlarm, ringDurationMs);
+                ringTimeout = setTimeout(stopAlarm, ringDurationMinutes * 60 * 1000);
             }
         }
 
         function stopAlarm() {
             stopAlarmSound();
-            
-            // Clear the auto-stop timeout if it was set
             if(ringTimeout) clearTimeout(ringTimeout);
             
-            // Reset UI
             stopAlarmBtn.style.display = 'none';
             setAlarmBtn.style.display = 'flex';
             testAlarmBtn.style.display = 'flex';
             alarmTimeInput.disabled = false;
             
-            // Reset sunrise overlay
             sunriseOverlay.style.transition = 'opacity 0.5s linear';
             sunriseOverlay.style.opacity = '1';
             
-            // Reset state variables
             isAlarmActive = false;
             isSunrisePeriod = false;
             alarmTime = null;
@@ -476,6 +527,7 @@
             }
             
             updateAlarmInfo("No alarm set");
+            saveSettings(); // Save the inactive state
         }
         
         function runTestAlarm() {
@@ -486,7 +538,6 @@
             
             isTestRunning = true;
             updateAlarmInfo("Testing alarm...");
-
             playAlarmSound(0);
 
             stopAlarmBtn.style.display = 'flex';
@@ -497,18 +548,14 @@
             
             testInterval = setInterval(() => {
                 const elapsedMs = Date.now() - testStartTime;
-                
-                // Fade in over the full test duration
                 const progress = Math.min(elapsedMs / TEST_ALARM_DURATION_MS, 1.0);
+                
                 sunriseOverlay.style.opacity = 1 - progress;
                 setVolume(progress);
 
                 if (progress >= 1.0) {
                     clearInterval(testInterval);
-                    // Let it ring for 2 seconds at full volume before stopping
-                    setTimeout(() => {
-                         if (isTestRunning) stopAlarm();
-                    }, 2000);
+                    setTimeout(() => { if (isTestRunning) stopAlarm(); }, 2000);
                 }
             }, 50);
         }
@@ -518,13 +565,13 @@
         function playAlarmSound(startVolume = 1.0) {
             stopAlarmSound();
             const sound = alarmSoundSelect.value;
-            
             setVolume(startVolume);
 
             if (sound === 'youtube') {
                 const videoId = parseYouTubeUrl(youtubeUrlInput.value);
-                if (videoId && youtubePlayer) {
+                if (videoId && youtubePlayer && typeof youtubePlayer.loadVideoById === 'function') {
                     youtubePlayer.loadVideoById(videoId);
+                    // Play will be handled by the onReady/onStateChange events
                 } else if (!videoId) {
                     updateAlarmInfo("Invalid YouTube URL. Playing no sound.");
                 }
@@ -594,11 +641,24 @@
                 width: '1',
                 events: {
                     'onReady': (event) => {
+                        // This event fires when the player is ready.
+                        // If an alarm is already in its sunrise/test phase, start playback.
                         if ((isSunrisePeriod || isTestRunning) && alarmSoundSelect.value === 'youtube') {
                             event.target.playVideo();
                         }
                     },
                     'onStateChange': (event) => {
+                        // When video starts playing, set initial volume
+                        if (event.data === YT.PlayerState.PLAYING) {
+                             const now = new Date();
+                             const sunriseDurationMinutes = parseInt(sunriseDurationInput.value, 10);
+                             const sunriseStartTime = new Date(alarmTime.getTime() - sunriseDurationMinutes * 60 * 1000);
+                             const totalDurationMs = alarmTime.getTime() - sunriseStartTime.getTime();
+                             const elapsedMs = now.getTime() - sunriseStartTime.getTime();
+                             const progress = isSunrisePeriod ? Math.min(elapsedMs / totalDurationMs, 1.0) : 0;
+                             setVolume(progress);
+                        }
+                        // Loop the video if it ends
                         if (event.data === YT.PlayerState.ENDED) {
                             youtubePlayer.playVideo();
                         }
@@ -617,6 +677,7 @@
                 } else if (urlObj.hostname.includes('youtube.com')) {
                     videoId = urlObj.searchParams.get('v');
                 }
+                // Basic validation for a YouTube video ID
                 if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
                     return videoId;
                 }
